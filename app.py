@@ -5,7 +5,7 @@ import numpy as np
 # ===== Load Model from Uploaded Path ===== #
 @st.cache_resource
 def load_model():
-    with open(r"C:\Users\HP\Desktop\Project2\model_p2.pkl", "rb") as f:
+    with open(r"model_p2.pkl", "rb") as f:
         return pickle.load(f)
 
 model = load_model()
@@ -48,3 +48,4 @@ if st.button("Predict Salary"):
         st.success(f"💰 Predicted Salary: **${int(prediction):,} / year**")
     except Exception as e:
         st.error(f"Prediction Failed: {e}")
+

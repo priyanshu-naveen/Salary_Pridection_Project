@@ -1,1 +1,1 @@
-# Salary_Pridection_Project
+# Salary_Prediction_Project

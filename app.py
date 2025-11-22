@@ -1,194 +1,410 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pickle
 
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression
 
-# ==========================================================
-# PAGE CONFIG
-# ==========================================================
+# ===================== PAGE CONFIG & CUSTOM CSS ===================== #
 st.set_page_config(
-    page_title="💼 Salary Prediction App",
-    layout="wide",
-    page_icon="💰"
+    page_title="Data Science Salary Predictor",
+    page_icon="💼",
+    layout="wide"
 )
 
-# ==========================================================
-# CUSTOM STYLING
-# ==========================================================
+# Subtle custom styling
 st.markdown(
     """
     <style>
         /* Background gradient */
-        .main {
-            background: linear-gradient(145deg, #141E30 0%, #243B55 100%);
+        .stApp {
+            background: linear-gradient(135deg, #0f172a 0%, #020617 40%, #111827 100%);
+            color: #e5e7eb;
         }
-
-        /* Text */
-        h1, h2, h3, h4, h5, h6, div, p {
-            color: #f1f1f1 !important;
-            font-family: 'Segoe UI', sans-serif;
+        /* Main card */
+        .main-card {
+            background: rgba(15, 23, 42, 0.9);
+            padding: 2rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(148, 163, 184, 0.35);
         }
-
-        /* Card design */
-        .block-container {
-            padding-top: 2rem;
+        /* Headings */
+        h1, h2, h3, h4 {
+            color: #e5e7eb !important;
         }
-
-        .card {
-            background: rgba(255, 255, 255, 0.07);
-            padding: 20px;
-            border-radius: 15px;
-            border: 1px solid rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
+        .subtitle {
+            color: #9ca3af;
+            font-size: 0.95rem;
         }
-
-        /* Prediction text */
-        .prediction-box {
-            background: rgba(0, 255, 150, 0.15);
-            border-left: 5px solid #00ff9d;
-            padding: 15px;
-            border-radius: 10px;
-            font-size: 1.3rem;
+        /* Input labels */
+        label {
+            font-weight: 500 !important;
         }
-
-        /* Button styling */
-        .stButton>button {
-            background-color: #00BFFF;
-            color: white;
-            border-radius: 10px;
-            padding: 0.6rem 1.2rem;
-            border: none;
+        /* Metric cards */
+        [data-testid="stMetricValue"] {
+            font-size: 1.4rem;
         }
-
-        .stButton>button:hover {
-            background-color: #009acd;
-            transform: scale(1.03);
+        /* Buttons */
+        .stButton > button {
+            width: 100%;
+            border-radius: 999px;
+            padding: 0.7rem 1.2rem;
+            font-weight: 600;
+            border: 1px solid rgba(148, 163, 184, 0.6);
         }
-
     </style>
     """,
     unsafe_allow_html=True
 )
 
-# ==========================================================
-# HEADER
-# ==========================================================
-st.markdown(
-    """
-    <h1 style='text-align:center; font-size: 3rem; margin-bottom: 0;'>
-    💼 Salary Prediction App
-    </h1>
-    <p style='text-align:center; font-size: 1.2rem;'>
-        Powered by D05 Batch ML Team
-    </p>
-    """,
-    unsafe_allow_html=True
-)
-
-# ==========================================================
-# LOAD DATA
-# ==========================================================
-@st.cache_data
-def load_data():
+# ===================== LOAD DATA & REBUILD PREPROCESSING ===================== #
+@st.cache_data(show_spinner=True)
+def load_raw_data():
     df = pd.read_csv("salaries.csv")
     return df
 
-try:
-    df = load_data()
-except:
-    st.error("❌ salaries.csv not found. Place it next to app.py and restart.")
-    st.stop()
 
-# ==========================================================
-# TRAIN MODEL (FROM .ipynb LOGIC)
-# ==========================================================
-def train_model(df):
-    X = df.drop(columns=['salary_in_usd'])
-    y = df['salary_in_usd']
+@st.cache_resource(show_spinner=True)
+def build_preprocessing_and_load_model():
+    """
+    Rebuild the same preprocessing that was used in the notebook:
+    - LabelEncode columns: experience_level, employment_type, job_title,
+      salary_currency, employee_residence, company_location, company_size
+    - train_test_split with test_size=0.20, random_state=42
+    - StandardScaler fitted ONLY on X_train
+    Then load model_p2.pkl (which contains rf_search).
+    """
+    df_raw = load_raw_data().copy()
 
-    X = pd.get_dummies(X)
+    # Categorical columns (same as in notebook)
+    cat_cols = [
+        "experience_level",
+        "employment_type",
+        "job_title",
+        "salary_currency",
+        "employee_residence",
+        "company_location",
+        "company_size"
+    ]
 
+    encoders = {}
+    df_encoded = df_raw.copy()
+
+    # Fit separate LabelEncoder for each column (equivalent to your loop)
+    for col in cat_cols:
+        le = LabelEncoder()
+        df_encoded[col] = le.fit_transform(df_encoded[col])
+        encoders[col] = le
+
+    # X and y exactly as in notebook: X = df.drop('salary_in_usd')
+    if "salary_in_usd" not in df_encoded.columns:
+        raise ValueError("Column 'salary_in_usd' not found in salaries.csv")
+
+    X = df_encoded.drop("salary_in_usd", axis=1)
+    y = df_encoded["salary_in_usd"]
+
+    # Same split as training
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42
     )
 
+    # StandardScaler fitted on X_train only (same as notebook)
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    scaler.fit(X_train)
 
-    model = LinearRegression()
-    model.fit(X_train_scaled, y_train)
+    # Load the trained RandomForest GridSearchCV object
+    with open("model_p2.pkl", "rb") as f:
+        model = pickle.load(f)
 
-    return model, scaler, X
+    return {
+        "raw_df": df_raw,
+        "encoders": encoders,
+        "scaler": scaler,
+        "model": model,
+        "feature_order": X.columns.tolist(),
+        "cat_cols": cat_cols
+    }
 
-model, scaler, X_matrix = train_model(df)
 
-# ==========================================================
-# SIDEBAR
-# ==========================================================
-st.sidebar.title("⚙️ Controls")
-st.sidebar.info("Adjust inputs and press **Predict Salary**")
-
-# ==========================================================
-# FEATURE INPUT UI
-# ==========================================================
-st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.subheader("🔧 Enter Employee Details")
-
-input_values = {}
-original_columns = df.drop(columns=['salary_in_usd']).columns
-
-cols = st.columns(2)
-
-for i, col in enumerate(original_columns):
-    with cols[i % 2]:
-        if df[col].dtype in [np.float64, np.int64]:
-            input_values[col] = st.number_input(
-                f"{col}",
-                min_value=float(df[col].min()),
-                max_value=float(df[col].max()),
-                value=float(df[col].median())
-            )
-        else:
-            choices = sorted(df[col].unique().tolist())
-            input_values[col] = st.selectbox(f"{col}", choices)
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ==========================================================
-# PREDICT
-# ==========================================================
-if st.button("🚀 Predict Salary"):
-    input_df = pd.DataFrame([input_values])
-    input_df = pd.get_dummies(input_df)
-
-    for col in X_matrix.columns:
-        if col not in input_df.columns:
-            input_df[col] = 0
-
-    input_df = input_df[X_matrix.columns]
-    input_scaled = scaler.transform(input_df)
-    prediction = model.predict(input_scaled)[0]
-
-    st.balloons()
-    
+# ===================== MAIN APP ===================== #
+def main():
     st.markdown(
-        f"""
-        <div class='prediction-box'>
-        <strong>Estimated Salary:</strong> ₹ {prediction:,.2f}
-        </div>
+        """
+        <h1>💼 Data Science Salary Predictor</h1>
+        <p class="subtitle">
+            Predict data science salaries (in USD) based on role, experience level,
+            location and more — using your trained Random Forest model.
+        </p>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-# Footer
-st.markdown(
-    """
-    <hr>
-    <p style='text-align:center; font-size: 0.9rem;'>Created with ❤️ in Streamlit</p>
-    """,
-    unsafe_allow_html=True
-)
+    # Build preprocessing and load model
+    try:
+        artifacts = build_preprocessing_and_load_model()
+    except FileNotFoundError as e:
+        st.error("❌ Could not find `salaries.csv` or `model_p2.pkl`. Please make sure both files are in the same folder as this app.")
+        st.stop()
+    except Exception as e:
+        st.error(f"⚠️ Error while loading model or data: {e}")
+        st.stop()
+
+    raw_df = artifacts["raw_df"]
+    encoders = artifacts["encoders"]
+    scaler = artifacts["scaler"]
+    model = artifacts["model"]
+    feature_order = artifacts["feature_order"]
+    cat_cols = artifacts["cat_cols"]
+
+    # ========== TOP KPI ROW ========== #
+    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+    with col_kpi1:
+        st.metric("Total Records", f"{len(raw_df):,}")
+    with col_kpi2:
+        st.metric("Unique Job Titles", f"{raw_df['job_title'].nunique():,}")
+    with col_kpi3:
+        st.metric("Median Salary (USD)", f"{int(raw_df['salary_in_usd'].median()):,}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ========== MAIN CARD ========== #
+    with st.container():
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+
+        left_col, right_col = st.columns([1.2, 0.9])
+
+        # ---------------- LEFT: FORM INPUTS ---------------- #
+        with left_col:
+            st.subheader("Enter Candidate & Job Details")
+
+            # Lay out inputs in multiple columns for a clean UI
+            c1, c2 = st.columns(2)
+            c3, c4 = st.columns(2)
+            c5, c6 = st.columns(2)
+
+            # --- Experience Level --- #
+            with c1:
+                exp_options = sorted(raw_df["experience_level"].unique())
+                exp_level = st.selectbox(
+                    "Experience Level",
+                    options=exp_options,
+                    index=0
+                )
+
+            # --- Employment Type --- #
+            with c2:
+                emp_type_options = sorted(raw_df["employment_type"].unique())
+                emp_type = st.selectbox(
+                    "Employment Type",
+                    options=emp_type_options,
+                    index=0
+                )
+
+            # --- Job Title --- #
+            with c3:
+                # You can limit to top N job titles to avoid huge dropdowns
+                job_counts = raw_df["job_title"].value_counts()
+                top_jobs = job_counts.index[:50].tolist()
+                other_jobs = sorted(set(raw_df["job_title"]) - set(top_jobs))
+
+                job_title = st.selectbox(
+                    "Job Title (top 50 shown)",
+                    options=top_jobs + ["Other"],
+                    index=0
+                )
+
+                if job_title == "Other":
+                    job_title = st.selectbox(
+                        "Choose from all titles",
+                        options=sorted(raw_df["job_title"].unique())
+                    )
+
+            # --- Salary Currency --- #
+            with c4:
+                currency_options = sorted(raw_df["salary_currency"].unique())
+                salary_currency = st.selectbox(
+                    "Salary Currency",
+                    options=currency_options,
+                    index=currency_options.index("USD") if "USD" in currency_options else 0
+                )
+
+            # --- Employee Residence --- #
+            with c5:
+                residence_options = sorted(raw_df["employee_residence"].unique())
+                employee_residence = st.selectbox(
+                    "Employee Residence",
+                    options=residence_options,
+                    index=0
+                )
+
+            # --- Company Location --- #
+            with c6:
+                company_location_options = sorted(raw_df["company_location"].unique())
+                company_location = st.selectbox(
+                    "Company Location",
+                    options=company_location_options,
+                    index=0
+                )
+
+            # Row for numeric inputs
+            n1, n2, n3 = st.columns(3)
+
+            with n1:
+                work_year = st.number_input(
+                    "Work Year",
+                    min_value=int(raw_df["work_year"].min()),
+                    max_value=int(raw_df["work_year"].max()),
+                    value=int(raw_df["work_year"].median()),
+                    step=1
+                )
+
+            with n2:
+                remote_ratio = st.slider(
+                    "Remote Ratio (%)",
+                    min_value=0,
+                    max_value=100,
+                    value=int(raw_df["remote_ratio"].median()),
+                    step=25,
+                    help="0 = On-site, 50 = Hybrid, 100 = Fully remote"
+                )
+
+            with n3:
+                # Original dataset also has a 'salary' column (base salary)
+                if "salary" in raw_df.columns:
+                    base_salary = st.number_input(
+                        "Current / Offered Salary (in original currency)",
+                        min_value=float(raw_df["salary"].min()),
+                        max_value=float(raw_df["salary"].max()),
+                        value=float(raw_df["salary"].median()),
+                        step=1000.0
+                    )
+                else:
+                    base_salary = st.number_input(
+                        "Base Salary (if column ‘salary’ missing, just put any rough value)",
+                        min_value=0.0,
+                        value=50000.0,
+                        step=5000.0
+                    )
+
+            # --- Company Size --- #
+            size_col = st.columns(1)[0]
+            with size_col:
+                company_size_options = sorted(raw_df["company_size"].unique())
+                company_size = st.radio(
+                    "Company Size",
+                    options=company_size_options,
+                    horizontal=True
+                )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            predict_btn = st.button("🔮 Predict Salary in USD")
+
+        # ---------------- RIGHT: OUTPUT / INFO ---------------- #
+        with right_col:
+            st.subheader("Prediction")
+            placeholder = st.empty()
+
+            st.markdown("---")
+            st.subheader("About this model")
+            st.write(
+                """
+                • Trained on the Data Science Salaries dataset  
+                • Uses **Label Encoding** for categorical features  
+                • Features are **Standard Scaled** (fitted on training split)  
+                • Final model: **Random Forest Regressor** tuned with GridSearchCV
+                """
+            )
+
+        # ---------------- HANDLE PREDICTION ---------------- #
+        if predict_btn:
+            try:
+                # 1. Create a single-row DataFrame with original (string) values
+                #    Ensure all feature columns used during training are present.
+                input_dict = {}
+
+                for col in feature_order:
+                    # Fill according to column name
+                    if col == "work_year":
+                        input_dict[col] = work_year
+                    elif col == "experience_level":
+                        input_dict[col] = exp_level
+                    elif col == "employment_type":
+                        input_dict[col] = emp_type
+                    elif col == "job_title":
+                        input_dict[col] = job_title
+                    elif col == "salary_currency":
+                        input_dict[col] = salary_currency
+                    elif col == "employee_residence":
+                        input_dict[col] = employee_residence
+                    elif col == "remote_ratio":
+                        input_dict[col] = remote_ratio
+                    elif col == "company_location":
+                        input_dict[col] = company_location
+                    elif col == "company_size":
+                        input_dict[col] = company_size
+                    elif col == "salary":
+                        input_dict[col] = base_salary
+                    else:
+                        # If there are any extra numeric columns, try to infer from raw_df median
+                        if col in raw_df.columns:
+                            # numeric or something else
+                            if np.issubdtype(raw_df[col].dtype, np.number):
+                                input_dict[col] = float(raw_df[col].median())
+                            else:
+                                # if non-numeric, fallback to first value
+                                input_dict[col] = raw_df[col].iloc[0]
+                        else:
+                            # Unknown column, set 0
+                            input_dict[col] = 0
+
+                input_df = pd.DataFrame([input_dict])
+
+                # 2. Encode categorical columns using the stored LabelEncoders
+                for col in cat_cols:
+                    le = encoders[col]
+                    val = input_df[col].iloc[0]
+
+                    if val not in le.classes_:
+                        # Handle unseen labels by adding to classes_ (simple but not perfect)
+                        le.classes_ = np.append(le.classes_, val)
+
+                    input_df[col] = le.transform([val])
+
+                # 3. Scale using the same StandardScaler fitted on X_train
+                input_df = input_df[feature_order]  # ensure correct column order
+                input_scaled = scaler.transform(input_df)
+
+                # 4. Predict using the loaded model (GridSearchCV)
+                pred_usd = model.predict(input_scaled)[0]
+
+                with placeholder:
+                    st.success("✅ Prediction complete!")
+                    st.markdown(
+                        f"""
+                        <h2 style="margin-top: 0.5rem;">
+                            Estimated Salary: <span style="color:#4ade80;">${pred_usd:,.0f}</span> / year
+                        </h2>
+                        <p class="subtitle">
+                            This is an approximate salary in <b>USD</b> based on your inputs and the trained model.
+                        </p>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+            except Exception as e:
+                st.error(f"Something went wrong during prediction: {e}")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
+
+
+# pip freeze > requirements.txt
+
+
+

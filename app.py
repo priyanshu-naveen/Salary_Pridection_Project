@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
 
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
 
 # ===================== PAGE CONFIG & CUSTOM CSS ===================== #
 st.set_page_config(
@@ -59,7 +59,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ===================== LOAD DATA & REBUILD PREPROCESSING ===================== #
+# ===================== LOAD DATA & BUILD MODEL ===================== #
 @st.cache_data(show_spinner=True)
 def load_raw_data():
     df = pd.read_csv("salaries.csv")
@@ -67,18 +67,18 @@ def load_raw_data():
 
 
 @st.cache_resource(show_spinner=True)
-def build_preprocessing_and_load_model():
+def build_preprocessing_and_train_model():
     """
-    Rebuild the same preprocessing that was used in the notebook:
+    Rebuild preprocessing and train a light RandomForest model inside the app:
     - LabelEncode columns: experience_level, employment_type, job_title,
       salary_currency, employee_residence, company_location, company_size
     - train_test_split with test_size=0.20, random_state=42
     - StandardScaler fitted ONLY on X_train
-    Then load model_p2.pkl (which contains rf_search).
+    - Train RandomForestRegressor (no GridSearchCV to keep it light)
     """
     df_raw = load_raw_data().copy()
 
-    # Categorical columns (same as in notebook)
+    # Categorical columns
     cat_cols = [
         "experience_level",
         "employment_type",
@@ -92,31 +92,36 @@ def build_preprocessing_and_load_model():
     encoders = {}
     df_encoded = df_raw.copy()
 
-    # Fit separate LabelEncoder for each column (equivalent to your loop)
+    # Fit separate LabelEncoder for each categorical column
     for col in cat_cols:
         le = LabelEncoder()
         df_encoded[col] = le.fit_transform(df_encoded[col])
         encoders[col] = le
 
-    # X and y exactly as in notebook: X = df.drop('salary_in_usd')
+    # X and y
     if "salary_in_usd" not in df_encoded.columns:
         raise ValueError("Column 'salary_in_usd' not found in salaries.csv")
 
     X = df_encoded.drop("salary_in_usd", axis=1)
     y = df_encoded["salary_in_usd"]
 
-    # Same split as training
+    # train-test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42
     )
 
-    # StandardScaler fitted on X_train only (same as notebook)
+    # StandardScaler fitted only on X_train
     scaler = StandardScaler()
-    scaler.fit(X_train)
+    X_train_scaled = scaler.fit_transform(X_train)
 
-    # Load the trained RandomForest GridSearchCV object
-    with open("model_p2.pkl", "rb") as f:
-        model = pickle.load(f)
+    # Light RandomForest model (fast enough, no GridSearchCV)
+    model = RandomForestRegressor(
+        n_estimators=200,
+        max_depth=None,
+        random_state=42,
+        n_jobs=-1
+    )
+    model.fit(X_train_scaled, y_train)
 
     return {
         "raw_df": df_raw,
@@ -135,20 +140,20 @@ def main():
         <h1>💼 Data Science Salary Predictor</h1>
         <p class="subtitle">
             Predict data science salaries (in USD) based on role, experience level,
-            location and more — using your trained Random Forest model.
+            location and more — powered by a Random Forest model trained on the dataset.
         </p>
         """,
         unsafe_allow_html=True,
     )
 
-    # Build preprocessing and load model
+    # Build preprocessing and train model (cached)
     try:
-        artifacts = build_preprocessing_and_load_model()
-    except FileNotFoundError as e:
-        st.error("❌ Could not find `salaries.csv` or `model_p2.pkl`. Please make sure both files are in the same folder as this app.")
+        artifacts = build_preprocessing_and_train_model()
+    except FileNotFoundError:
+        st.error("❌ Could not find `salaries.csv`. Please make sure it is in the same folder as this app.")
         st.stop()
     except Exception as e:
-        st.error(f"⚠️ Error while loading model or data: {e}")
+        st.error(f"⚠️ Error while preparing model or data: {e}")
         st.stop()
 
     raw_df = artifacts["raw_df"]
@@ -204,7 +209,6 @@ def main():
 
             # --- Job Title --- #
             with c3:
-                # You can limit to top N job titles to avoid huge dropdowns
                 job_counts = raw_df["job_title"].value_counts()
                 top_jobs = job_counts.index[:50].tolist()
                 other_jobs = sorted(set(raw_df["job_title"]) - set(top_jobs))
@@ -314,19 +318,17 @@ def main():
                 • Trained on the Data Science Salaries dataset  
                 • Uses **Label Encoding** for categorical features  
                 • Features are **Standard Scaled** (fitted on training split)  
-                • Final model: **Random Forest Regressor** tuned with GridSearchCV
+                • Final model: **Random Forest Regressor** (trained inside this app, cached)
                 """
             )
 
         # ---------------- HANDLE PREDICTION ---------------- #
         if predict_btn:
             try:
-                # 1. Create a single-row DataFrame with original (string) values
-                #    Ensure all feature columns used during training are present.
+                # 1. Create a single-row DataFrame with original (string/numeric) values
                 input_dict = {}
 
                 for col in feature_order:
-                    # Fill according to column name
                     if col == "work_year":
                         input_dict[col] = work_year
                     elif col == "experience_level":
@@ -348,16 +350,13 @@ def main():
                     elif col == "salary":
                         input_dict[col] = base_salary
                     else:
-                        # If there are any extra numeric columns, try to infer from raw_df median
+                        # Any extra numeric columns → use dataset median
                         if col in raw_df.columns:
-                            # numeric or something else
                             if np.issubdtype(raw_df[col].dtype, np.number):
                                 input_dict[col] = float(raw_df[col].median())
                             else:
-                                # if non-numeric, fallback to first value
                                 input_dict[col] = raw_df[col].iloc[0]
                         else:
-                            # Unknown column, set 0
                             input_dict[col] = 0
 
                 input_df = pd.DataFrame([input_dict])
@@ -377,7 +376,7 @@ def main():
                 input_df = input_df[feature_order]  # ensure correct column order
                 input_scaled = scaler.transform(input_df)
 
-                # 4. Predict using the loaded model (GridSearchCV)
+                # 4. Predict using the trained model
                 pred_usd = model.predict(input_scaled)[0]
 
                 with placeholder:
@@ -402,9 +401,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# pip freeze > requirements.txt
-
-
-
